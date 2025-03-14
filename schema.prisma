@@ -11,6 +11,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -22,9 +23,15 @@ model User {
  otherName String?
   role      Role
   createdAt DateTime @default(now())
+  pictureUrl String?
   student      Student?
   administrator Administrator?
 }
+enum Role {
+  STUDENT
+  ADMIN
+}
+
 
 model Student {
   id         String  @id @default(uuid())
@@ -32,6 +39,7 @@ model Student {
   department String
   eligible   Boolean @default(true)
   wallet     String?  @unique
+  faculty    String ?
   user       User    @relation(fields: [id], references: [id])
   candidate  Candidate[]
   Vote Vote[]
@@ -41,13 +49,14 @@ model Administrator {
   id    String @id @default(uuid())
   user  User   @relation(fields: [id], references: [id], onDelete: Cascade)
 }
+
 model Election {
   id              String        @id @default(uuid())
   title           String
   academicSession String
   description     String?
   type            ElectionType
-  department      String?  // Only required for departmental elections
+  faculty         String?
   startDate       DateTime
   endDate         DateTime
   status          ElectionStatus @default(UPCOMING)
@@ -58,6 +67,10 @@ model Election {
   createdAt       DateTime @default(now())
 }
 
+enum ElectionType {
+  FACULTY         // Changed from DEPARTMENTAL
+  OPEN
+}
 
 enum LiveStatus {
   LIVE        // Pushed to the blockchain, students can vote
@@ -91,14 +104,9 @@ model Vote {
   candidate   Candidate @relation(fields: [candidateId], references: [id])
   candidateId String
   createdAt   DateTime @default(now())
-
   @@unique([studentId, candidateId])
 }
 
-enum ElectionType {
-  DEPARTMENTAL
-  OPEN
-}
 
 enum ElectionStatus {
   ONGOING
@@ -106,7 +114,3 @@ enum ElectionStatus {
   UPCOMING
 }
 
-enum Role {
-  STUDENT
-  ADMIN
-}
