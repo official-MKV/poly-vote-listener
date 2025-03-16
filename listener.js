@@ -59,7 +59,7 @@ async function setupMainContractListener() {
 
         if (election) {
           console.log(`Processing vote for election: ${election.title}`);
-          await processVoteEvent(voter, electionId, positionIds);
+          await processVoteEvent(voter, electionId, positionIds, event);
         } else {
           console.warn(`Received vote for unknown election ID: ${electionId}`);
         }
@@ -94,23 +94,114 @@ async function setupMainContractListener() {
 }
 
 // Function to process a vote event
-async function processVoteEvent(voter, electionId, positionIds) {
+async function processVoteEvent(voter, electionId, positionIds, event) {
   try {
     console.log(`Processing vote from ${voter} for election ${electionId}`);
+    console.log(`Position IDs voted for: ${positionIds}`);
 
-    // Record the vote in the database
-    await prisma.vote.create({
-      data: {
-        election: { connect: { id: electionId } },
-        voterAddress: voter,
-        timestamp: new Date(),
-        blockchainReference: true,
-      },
-    });
+    // Get the election data from blockchain to find the vote details
+    const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL);
+    const contract = new ethers.Contract(
+      CONTRACT_ADDRESS,
+      CONTRACT_ABI,
+      provider
+    );
 
-    console.log(`Vote recorded in database for election ${electionId}`);
+    try {
+      // Find the student with this wallet address
+      const student = await prisma.student.findFirst({
+        where: {
+          wallet: voter,
+        },
+      });
+
+      if (!student) {
+        console.warn(`No student found with wallet address ${voter}`);
+        return;
+      }
+
+      // Get the full election data
+      const onChainElection = await contract.getElection(electionId);
+
+      if (!onChainElection || !onChainElection.positions) {
+        console.warn(
+          `Could not retrieve blockchain data for election ${electionId}`
+        );
+        return;
+      }
+
+      // For each position ID in the event
+      for (const positionId of positionIds) {
+        try {
+          // Find the on-chain position
+          const onChainPosition = onChainElection.positions.find(
+            (p) => p.id === positionId
+          );
+          if (!onChainPosition) {
+            console.warn(`Position ${positionId} not found in blockchain data`);
+            continue;
+          }
+
+          // Find candidates for this position with most votes
+          let maxVotes = 0;
+          let votedCandidateId = null;
+
+          for (const candidate of onChainPosition.candidates) {
+            const votes = Number(candidate.voteCount);
+            if (votes > maxVotes) {
+              maxVotes = votes;
+              votedCandidateId = candidate.id;
+            }
+          }
+
+          if (!votedCandidateId) {
+            console.warn(
+              `Could not determine voted candidate for position ${positionId}`
+            );
+            continue;
+          }
+
+          console.log(
+            `Detected vote for candidate ${votedCandidateId} in position ${positionId}`
+          );
+
+          // Check if this vote already exists
+          const existingVote = await prisma.vote.findFirst({
+            where: {
+              studentId: student.id,
+              candidateId: votedCandidateId,
+            },
+          });
+
+          if (existingVote) {
+            console.log(
+              `Vote already exists for student ${student.id} and candidate ${votedCandidateId}`
+            );
+            continue;
+          }
+
+          // Create a vote record
+          await prisma.vote.create({
+            data: {
+              student: { connect: { id: student.id } },
+              candidate: { connect: { id: votedCandidateId } },
+            },
+          });
+
+          console.log(
+            `Created vote record for student ${student.id} and candidate ${votedCandidateId}`
+          );
+        } catch (error) {
+          console.error(
+            `Error processing position ${positionId}: ${error.message}`
+          );
+        }
+      }
+    } catch (error) {
+      console.error(`Error retrieving blockchain data: ${error.message}`);
+    }
   } catch (error) {
-    console.error(`Error processing vote: ${error.message}`);
+    console.error(`Error processing vote event: ${error.message}`);
   }
 }
 
@@ -123,7 +214,6 @@ async function syncVoteCounts() {
     // Find all active elections
     const activeElections = await prisma.election.findMany({
       where: {
-        status: "ACTIVE",
         liveStatus: "LIVE",
         smartContractId: { not: null },
       },
@@ -149,36 +239,42 @@ async function syncVoteCounts() {
       try {
         console.log(`Syncing votes for election: ${election.title}`);
 
-        // Get positions for this election
-        const positions = await prisma.position.findMany({
-          where: { electionId: election.id },
-          include: { candidates: true },
-        });
+        // Get the full election data from the blockchain
+        const onChainElection = await contract.getElection(election.id);
 
-        // For each position, get votes for each candidate
-        for (const position of positions) {
-          for (const candidate of position.candidates) {
-            try {
-              // Get vote count from blockchain
-              const voteCount = await contract.getCandidateVotes(
-                election.id,
-                position.id,
-                candidate.id
-              );
+        if (!onChainElection || !onChainElection.positions) {
+          console.log(
+            `No data found on blockchain for election: ${election.title}`
+          );
+          continue;
+        }
 
-              console.log(
-                `Election: ${election.title}, Position: ${position.title}, ` +
-                  `Candidate: ${candidate.id}, Votes: ${voteCount}`
-              );
+        console.log(`Retrieved on-chain data for election: ${election.title}`);
 
-              // Update vote count in database
-              await prisma.candidate.update({
-                where: { id: candidate.id },
-                data: { voteCount: Number(voteCount) },
-              });
-            } catch (error) {
-              console.error(
-                `Error getting votes for candidate ${candidate.id}: ${error.message}`
+        // Process each position
+        for (const onChainPosition of onChainElection.positions) {
+          const positionId = onChainPosition.id;
+
+          // Process each candidate
+          for (const onChainCandidate of onChainPosition.candidates) {
+            const candidateId = onChainCandidate.id;
+            const onChainVotes = Number(onChainCandidate.voteCount);
+
+            // Get database vote count
+            const dbVotes = await prisma.vote.count({
+              where: {
+                candidateId: candidateId,
+              },
+            });
+
+            console.log(
+              `Candidate ${candidateId}: On-chain votes = ${onChainVotes}, Database votes = ${dbVotes}`
+            );
+
+            // If there's a discrepancy, log it (we can't directly modify vote counts)
+            if (onChainVotes !== dbVotes) {
+              console.warn(
+                `Vote count mismatch for candidate ${candidateId}: On-chain=${onChainVotes}, DB=${dbVotes}`
               );
             }
           }

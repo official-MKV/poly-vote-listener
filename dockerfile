@@ -1,28 +1,28 @@
 FROM node:18-alpine
 
+# Install necessary packages for Prisma
+RUN apk add --no-cache openssl
+
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
+# Copy package files
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN npm ci
 
 # Copy prisma schema
 COPY prisma ./prisma/
 
-# Generate Prisma client
+# Copy source code and artifacts
+COPY artifacts ./artifacts/
+COPY listener.js ./
+
+# Generate Prisma client without requiring migrations
 RUN npx prisma generate
 
-# Copy artifacts for contract ABIs
-COPY artifacts ./artifacts/
-
-# Copy the listener script and other necessary files
-COPY listener.js ./
-COPY .env.example ./.env
-
-# Set environment variables
+# Set environment variables (these will be overridden by secrets)
 ENV NODE_ENV=production
 
 # Run the listener

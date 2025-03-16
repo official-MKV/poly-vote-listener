@@ -1,7 +1,7 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Looking ays to speed up your queries, or scale easily with your serverless or edge functions?
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
@@ -11,7 +11,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  // directUrl = env("DIRECT_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -61,7 +61,7 @@ model Election {
   endDate         DateTime
   status          ElectionStatus @default(UPCOMING)
   liveStatus      LiveStatus     @default(NOT_LIVE)
-  smartContractId String?        @unique  // Stores blockchain contract address (optional)
+  smartContractId String?
   positions       Position[]
 
   createdAt       DateTime @default(now())
